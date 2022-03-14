@@ -97,7 +97,8 @@ endif()
 
 
 if("${PX4_BOARD}" MATCHES "beaglebone_blue")
-	target_link_libraries(px4 PRIVATE robotics_cape)
+	message("beaglebone_blue, skip link robotics_cape")
+#	target_link_libraries(px4 PRIVATE robotics_cape)
 
 elseif("${PX4_BOARD}" MATCHES "emlid_navio2")
 	target_link_libraries(px4 PRIVATE atomic)

@@ -37,4 +37,5 @@ px4_add_library(drivers_board
 	init.cpp
 	spi.cpp
 )
-target_link_libraries(drivers_board PRIVATE robotics_cape)
+#target_link_libraries(drivers_board PRIVATE robotics_cape)
+target_link_libraries(drivers_board PRIVATE)

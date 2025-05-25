@@ -1,0 +1,11 @@
+Host bbb
+    HostName 192.168.0.194
+    User debian
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host beaglebone.lan
+    HostName 192.168.0.194
+    User debian
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null    

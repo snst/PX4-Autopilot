@@ -35,6 +35,8 @@
 
 using namespace time_literals;
 
+//#define DUMP_VALUES
+
 static constexpr int16_t combine(uint8_t msb, uint8_t lsb)
 {
 	return (msb << 8u) | lsb;
@@ -45,13 +47,17 @@ MPU9250_I2C::MPU9250_I2C(const I2CSPIDriverConfig &config) :
 	I2CSPIDriver(config),
 	_drdy_gpio(config.drdy_gpio),
 	_px4_accel(get_device_id(), config.rotation),
-	_px4_gyro(get_device_id(), config.rotation)
+	_px4_gyro(get_device_id(), config.rotation),
+	_px4_mag(get_device_id(), config.rotation)
 {
 	if (_drdy_gpio != 0) {
 		_drdy_missed_perf = perf_alloc(PC_COUNT, MODULE_NAME": DRDY missed");
 	}
-
 	ConfigureSampleRate(_px4_gyro.get_max_rate_hz());
+	_px4_mag.set_device_type(DRV_MAG_DEVTYPE_AK8963);
+	// in 16-bit sampling mode the mag resolution is 1.5 milli Gauss per bit */
+	_px4_mag.set_scale(1.5e-3f);
+	printf("deviceid: 0x%x\n", get_device_id());	 // 2385937
 }
 
 MPU9250_I2C::~MPU9250_I2C()
@@ -145,7 +151,7 @@ void MPU9250_I2C::RunImpl()
 			RegisterWrite(Register::USER_CTRL, USER_CTRL_BIT::SIG_COND_RST);
 
 			// if reset succeeded then configure
-			_state = STATE::CONFIGURE;
+			_state = STATE::CONFIGURE_MAG;
 			ScheduleDelayed(100_ms);
 
 		} else {
@@ -162,6 +168,89 @@ void MPU9250_I2C::RunImpl()
 		}
 
 		break;
+
+	case STATE::CONFIGURE_MAG:
+		printf("MPU9250_I2C::CONFIGURE_MAG\n");
+		// Enable bypass mode
+		RegisterWrite(Register::INT_PIN_CFG, INT_PIN_CFG_BIT::BYPASS_EN);
+		_state = STATE::CONFIGURE_MAG_RESET;
+		ScheduleDelayed(10_ms);
+		break;
+
+	case STATE::CONFIGURE_MAG_RESET:
+		printf("MPU9250_I2C::CONFIGURE_MAG_RESET\n");
+		_mag_reset_timestamp = now;
+		// Power down AK8963 first
+		MagRegisterWrite(AKM_AK8963::Register::CNTL2, AKM_AK8963::CNTL2_BIT::SRST);
+		_state = STATE::CONFIGURE_MAG_WAIT_FOR_RESET;
+		ScheduleDelayed(100_ms);
+		break;
+
+	case STATE::CONFIGURE_MAG_WAIT_FOR_RESET:
+	{
+		printf("MPU9250_I2C::CONFIGURE_MAG_WAIT_FOR_RESET\n");
+		uint8_t WIA = 0;
+		MagRegisterRead(AKM_AK8963::Register::WIA, &WIA, 1);
+
+		if (WIA == AKM_AK8963::Device_ID) {
+			printf("MPU9250_I2C::CONFIGURE_MAG_WAIT_FOR_RESET: WIA passed\n");
+
+			if (!_sensitivity_adjustments_loaded) {
+				printf("MPU9250_I2C::CONFIGURE_MAG_WAIT_FOR_RESET: !_sensitivity_adjustments_loaded\n");
+
+				// Set Fuse ROM Access mode before reading Fuse ROM data.
+				MagRegisterWrite(AKM_AK8963::Register::CNTL1, AKM_AK8963::CNTL1_BIT::BIT_16 | AKM_AK8963::CNTL1_BIT::FUSE_ROM_ACCESS_MODE);
+				_state = STATE::CONFIGURE_MAG_READ_SENSITIVITY_ADJUSTMENTS;
+				ScheduleDelayed(100_ms);
+			} else {
+				printf("MPU9250_I2C::CONFIGURE_MAG_WAIT_FOR_RESET: _sensitivity_adjustments_loaded\n");
+				// set continuous mode 2 (100 Hz)
+				MagRegisterWrite(AKM_AK8963::Register::CNTL1, AKM_AK8963::CNTL1_BIT::CONTINUOUS_MODE_2 | AKM_AK8963::CNTL1_BIT::BIT_16);
+				_state = STATE::CONFIGURE;
+				ScheduleDelayed(100_ms);
+			}
+		} else {
+			// RESET not complete
+			if (hrt_elapsed_time(&_mag_reset_timestamp) > 1000_ms) {
+				PX4_DEBUG("AK8963 reset failed, retrying");
+				_state = STATE::CONFIGURE_MAG_RESET;
+				ScheduleDelayed(1000_ms);
+
+			} else {
+				PX4_DEBUG("AK8963 reset not complete, check again in 100 ms");
+				ScheduleDelayed(100_ms);
+			}
+		}
+
+		break;
+	}
+
+	case STATE::CONFIGURE_MAG_READ_SENSITIVITY_ADJUSTMENTS:
+	{
+		printf("MPU9250_I2C::CONFIGURE_MAG_READ_SENSITIVITY_ADJUSTMENTS\n");
+		uint8_t response[3] {};
+		// Read ASAX, ASAY, ASAZ
+		MagRegisterRead(AKM_AK8963::Register::ASAX, response, 3);
+
+		bool valid = true;
+
+		for (int i = 0; i < 3; i++) {
+			if (response[i] != 0 && response[i] != 0xFF) {
+				_sensitivity[i] = ((float)(response[i] - 128) / 256.f) + 1.f;
+
+			} else {
+				valid = false;
+			}
+		}
+		_sensitivity_adjustments_loaded = valid;
+		printf("_sensitivity: %f %f %f\n", (double)_sensitivity[0], (double)_sensitivity[1], (double)_sensitivity[2]);
+
+		// After reading fuse ROM data, set power-down mode (MODE[3:0]=“0000”) before the transition to another mode.
+		MagRegisterWrite(AKM_AK8963::Register::CNTL1, 0);
+		_state = STATE::CONFIGURE_MAG_RESET;
+		ScheduleDelayed(100_ms);
+		break;
+	}
 
 	case STATE::CONFIGURE:
 		if (Configure()) {
@@ -228,14 +317,15 @@ void MPU9250_I2C::RunImpl()
 			} else {
 				// FIFO count (size in bytes) should be a multiple of the FIFO::DATA structure
 				uint8_t samples = fifo_count / sizeof(FIFO::DATA);
+				//printf("fifo_count: %d, samples: %d\n", fifo_count, samples);
 
 				// tolerate minor jitter, leave sample to next iteration if behind by only 1
-				if (samples == _fifo_gyro_samples + 1) {
+				if (samples == _fifo_gyro_samples + 1) { // == 3 + 1
 					timestamp_sample -= static_cast<int>(FIFO_SAMPLE_DT);
 					samples--;
 				}
 
-				if (samples > FIFO_MAX_SAMPLES) {
+				if (samples > FIFO_MAX_SAMPLES) { // 32
 					// not technically an overflow, but more samples than we expected or can publish
 					FIFOReset();
 					perf_count(_fifo_overflow_perf);
@@ -280,9 +370,51 @@ void MPU9250_I2C::RunImpl()
 					_temperature_update_timestamp = now;
 				}
 			}
+
+			if (hrt_elapsed_time(&_mag_update_timestamp) >= 10_ms) {
+				ProcessMagentometer(now);
+				_mag_update_timestamp = now;
+			}
+
 		}
 
 		break;
+	}
+}
+
+void MPU9250_I2C::ProcessMagentometer(const hrt_abstime &timestamp_sample)
+{
+	MagTransferBuffer buffer{};
+	uint8_t cmd = static_cast<uint8_t>(Register::EXT_SENS_DATA_00);
+
+	if (transfer(&cmd, 1, (uint8_t*) &buffer, 7) != PX4_OK) {
+		//perf_count(_bad_transfer_perf);
+		printf("MAG read failed\n");
+		return;
+	}
+	if (buffer.ST2 & AKM_AK8963::ST2_BIT::HOFL) {
+		//perf_count(_magnetic_sensor_overflow_perf);
+		printf("MAG overflow\n");
+
+	} else if (buffer.ST2 & AKM_AK8963::ST2_BIT::BITM) {
+		const int16_t x = combine(buffer.HXH, buffer.HXL);
+		const int16_t y = combine(buffer.HYH, buffer.HYL);
+		const int16_t z = combine(buffer.HZH, buffer.HZL);
+
+		// sensor's frame is +Y forward (X), -X right (Y), +Z down (Z)
+		// adjust with sensitivity scale factors
+		float x_f = y * _sensitivity[0];   // X := +Y
+		float y_f = -x * _sensitivity[1];  // Y := -X
+		float z_f = z * _sensitivity[2];   // Z := +Z
+
+		_px4_mag.update(timestamp_sample, x_f, y_f, z_f);
+
+#ifdef DUMP_VALUES
+		printf("M: %f %f %f\n", (double) x_f, (double) y_f, (double) z_f);
+#endif
+		// if (_failure_count > 0) {
+		// 	_failure_count--;
+		// }
 	}
 }
 
@@ -344,13 +476,19 @@ void MPU9250_I2C::ConfigureGyro()
 void MPU9250_I2C::ConfigureSampleRate(int sample_rate)
 {
 	// round down to nearest FIFO sample dt * SAMPLES_PER_TRANSFER
-	const float min_interval = FIFO_SAMPLE_DT * SAMPLES_PER_TRANSFER;
+	const float min_interval = FIFO_SAMPLE_DT * SAMPLES_PER_TRANSFER; // 1000.000000
 	_fifo_empty_interval_us = math::max(roundf((1e6f / (float)sample_rate) / min_interval) * min_interval, min_interval);
 
-	_fifo_gyro_samples = roundf(math::min((float)_fifo_empty_interval_us / (1e6f / GYRO_RATE), (float)FIFO_MAX_SAMPLES));
+	_fifo_gyro_samples = roundf(math::min((float)_fifo_empty_interval_us / (1e6f / GYRO_RATE), (float)FIFO_MAX_SAMPLES)); // 3
 
 	// recompute FIFO empty interval (us) with actual gyro sample limit
-	_fifo_empty_interval_us = _fifo_gyro_samples * (1e6f / GYRO_RATE);
+	_fifo_empty_interval_us = _fifo_gyro_samples * (1e6f / GYRO_RATE); // 3000us
+
+	printf("ConfigureSampleRate: sample_rate: %d\n", sample_rate); // 400
+	printf("min_interval: %f\n", (double)min_interval); // 1000.000000
+	printf("_fifo_gyro_samples: %d\n", _fifo_gyro_samples); // 3
+	printf("_fifo_empty_interval_us: %d\n", _fifo_empty_interval_us); // 3000us
+	printf("FIFO_MAX_SAMPLES: %d\n", FIFO_MAX_SAMPLES); // 32
 }
 
 bool MPU9250_I2C::Configure()
@@ -522,14 +660,15 @@ bool MPU9250_I2C::ProcessAccel(const hrt_abstime &timestamp_sample, const FIFO::
 	accel.timestamp_sample = timestamp_sample;
 	accel.samples = 0;
 	accel.dt = FIFO_SAMPLE_DT * SAMPLES_PER_TRANSFER;
-
 	bool bad_data = false;
 
 	for (int i = 0; i < samples; i = i + SAMPLES_PER_TRANSFER) {
 		int16_t accel_x = combine(fifo[i].ACCEL_XOUT_H, fifo[i].ACCEL_XOUT_L);
 		int16_t accel_y = combine(fifo[i].ACCEL_YOUT_H, fifo[i].ACCEL_YOUT_L);
 		int16_t accel_z = combine(fifo[i].ACCEL_ZOUT_H, fifo[i].ACCEL_ZOUT_L);
-
+#ifdef DUMP_VALUES
+		printf("A(%d/%d): %d %d %d\n", i, samples, accel_x, accel_y, accel_z);
+#endif
 		// sensor's frame is +x forward, +y left, +z up
 		//  flip y & z to publish right handed with z down (x forward, y right, z down)
 		accel.x[accel.samples] = accel_x;
@@ -559,7 +698,9 @@ void MPU9250_I2C::ProcessGyro(const hrt_abstime &timestamp_sample, const FIFO::D
 		const int16_t gyro_x = combine(fifo[i].GYRO_XOUT_H, fifo[i].GYRO_XOUT_L);
 		const int16_t gyro_y = combine(fifo[i].GYRO_YOUT_H, fifo[i].GYRO_YOUT_L);
 		const int16_t gyro_z = combine(fifo[i].GYRO_ZOUT_H, fifo[i].GYRO_ZOUT_L);
-
+#ifdef DUMP_VALUES
+		printf("G(%d/%d): %d %d %d\n", i, samples, gyro_x, gyro_y, gyro_z);
+#endif
 		// sensor's frame is +x forward, +y left, +z up
 		//  flip y & z to publish right handed with z down (x forward, y right, z down)
 		gyro.x[i] = gyro_x;
@@ -592,4 +733,26 @@ void MPU9250_I2C::UpdateTemperature()
 		_px4_accel.set_temperature(TEMP_degC);
 		_px4_gyro.set_temperature(TEMP_degC);
 	}
+}
+
+void MPU9250_I2C::MagRegisterWrite(AKM_AK8963::Register reg, uint8_t value)
+{
+	const uint8_t addr = get_device_address();
+	set_device_address(AKM_AK8963::I2C_ADDRESS_DEFAULT);
+
+	uint8_t cmd[2];
+	cmd[0] = static_cast<uint8_t>(reg);
+	cmd[1] = value;
+	//set_frequency(SPI_SPEED); // low speed for regular registers
+	transfer(cmd, sizeof(cmd), nullptr, 0);
+	set_device_address(addr);
+}
+
+void MPU9250_I2C::MagRegisterRead(AKM_AK8963::Register reg, uint8_t* dest, uint8_t size)
+{
+	const uint8_t addr = get_device_address();
+	set_device_address(AKM_AK8963::I2C_ADDRESS_DEFAULT);
+	uint8_t cmd = static_cast<uint8_t>(reg);
+	transfer(&cmd, 1, dest, size);
+	set_device_address(addr);
 }

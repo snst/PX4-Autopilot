@@ -42,6 +42,8 @@
 
 #include <cstdint>
 
+//#define MPU9250_ENABLED_MAG_FIFO
+
 namespace InvenSense_MPU9250
 {
 // TODO: move to a central header
@@ -159,6 +161,7 @@ enum FIFO_EN_BIT : uint8_t {
 	GYRO_YOUT = Bit5,
 	GYRO_ZOUT = Bit4,
 	ACCEL     = Bit3,
+	SLV_0     = Bit0,
 };
 
 // I2C_MST_CTRL
@@ -253,6 +256,16 @@ struct DATA {
 	uint8_t GYRO_YOUT_L;
 	uint8_t GYRO_ZOUT_H;
 	uint8_t GYRO_ZOUT_L;
+#ifdef MPU9250_ENABLED_MAG_FIFO
+    // Magnetometer data from AK8963 (read via EXT_SENS_DATA_00 - EXT_SENS_DATA_06)
+    uint8_t MAG_XOUT_L;
+    uint8_t MAG_XOUT_H;
+    uint8_t MAG_YOUT_L;
+    uint8_t MAG_YOUT_H;
+    uint8_t MAG_ZOUT_L;
+    uint8_t MAG_ZOUT_H;
+    uint8_t MAG_ST2; // Status 2 register from AK8963
+#endif
 };
 }
 

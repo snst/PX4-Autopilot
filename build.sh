@@ -19,6 +19,7 @@ opt_env=""
 opt_build_robot=""
 opt_upload_robot=""
 opt_clone_px4=""
+opt_upload_pru=""
 
 #if ! grep -q "bbb" /etc/hosts; then
 #    echo "192.168.0.194 bbb" >> /etc/hosts
@@ -38,6 +39,7 @@ while [[ "$#" -gt 0 ]]; do
         -b|--build) opt_build=1 ;;
         --build_robot) opt_build_robot=1 ;;
         --upload_robot) opt_upload_robot=1 ;;
+        --upload_pru) opt_upload_pru=1 ;;
         --env) opt_env=1 ;;
         --install_toolchain) opt_install_toolchain=1 ;;
         --clone_px4) opt_clone_px4=1 ;;
@@ -121,5 +123,13 @@ if [[ $opt_upload_robot ]] ; then
     rsync -arh --progress $ROBOT_DIR/examples/bin debian@bbb:/home/debian/robot
     rsync -arh --progress $ROBOT_DIR/library/lib debian@bbb:/home/debian/robot
     echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/debian/robot/lib"
+fi
+
+
+if [[ $opt_upload_pru ]] ; then
+    #cd $PX4_DIR
+    SRC_FILE=$PX4_DIR/build/beaglebone_blue_default/librobotcontrol-prefix/src/librobotcontrol/pru_firmware/fw/am335x-pru1-rc-servo-fw
+    rsync -arh --progress $SRC_FILE debian@bbb:/home/debian/px4
+    echo "sudo cp am335x-pru1-rc-servo-fw /lib/firmware"
 fi
 

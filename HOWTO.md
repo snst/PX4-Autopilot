@@ -4,6 +4,9 @@
 mkdir -p downloads
 cd downloads
 wget https://files.beagle.cc/file/beagleboard-public-2021/images/bone-debian-10.3-console-armhf-2020-04-06-1gb.img.xz
+or
+wget https://rcn-ee.com/rootfs/release/2023-07-01/buster-console-armhf/bone-eMMC-flasher-debian-10.13-console-armhf-2023-07-01-1gb.img.xz
+
 ```
 
 https://www.beagleboard.org/distros
@@ -12,9 +15,11 @@ https://forum.beagleboard.org/t/debian-10-x-buster-monthly-snapshot-2023-07-01-f
 https://rcn-ee.com/rootfs/release/2023-07-01/buster-console-armhf/bone-debian-10.13-console-armhf-2023-07-01-1gb.img.xz
 https://rcn-ee.com/rootfs/release/2023-07-01/buster-console-armhf/bone-eMMC-flasher-debian-10.13-console-armhf-2023-07-01-1gb.img.xz
 
+
 ## Flash image
 press "SD" button while power attach
 
+### If not emmc image:
 **login:** debian<br>
 **pwd:** temppwd
 ``` bash
@@ -23,25 +28,10 @@ sync
 ```
 uncomment last line to flash emmc. power cycle.
 
-# Download toolchain
-``` bash
-./build.sh --install_toolchain
-```
-or
 
-``` bash
-mkdir -p toolchain
-cd toolchain/
-wget https://developer.arm.com/-/media/Files/downloads/gnu-a/8.3-2019.02/gcc-arm-8.3-2019.02-x86_64-arm-linux-gnueabihf.tar.xz
-tar -xf gcc-arm-8.3-2019.02-x86_64-arm-linux-gnueabihf.tar.xz
-```
+## Configure bbb
 
-
-https://developer.arm.com/-/media/Files/downloads/gnu-a/8.3-2019.02/gcc-arm-8.3-2019.02-x86_64-arm-linux-gnueabihf.tar.xz
-
-# Configure bbb
-
-## WLAN
+### WLAN
 Connect via serial terminal:
 ``` bash
 sudo -s
@@ -87,7 +77,37 @@ Target:
 sudo apt update
 #sudo apt install libc6
 sudo apt-get install i2c-tools
+sudo apt install screen
+
 ```
+
+### GPS
+
+``` bash
+dmesg | grep tty
+screen /dev/ttyS1 9600
+
+```
+exit: Ctrl + A, then K
+
+
+
+
+# Download toolchain
+``` bash
+./build.sh --install_toolchain
+```
+or
+
+``` bash
+mkdir -p toolchain
+cd toolchain/
+wget https://developer.arm.com/-/media/Files/downloads/gnu-a/8.3-2019.02/gcc-arm-8.3-2019.02-x86_64-arm-linux-gnueabihf.tar.xz
+tar -xf gcc-arm-8.3-2019.02-x86_64-arm-linux-gnueabihf.tar.xz
+```
+
+
+https://developer.arm.com/-/media/Files/downloads/gnu-a/8.3-2019.02/gcc-arm-8.3-2019.02-x86_64-arm-linux-gnueabihf.tar.xz
 
 # PX4
 ## Clone repo
@@ -145,6 +165,7 @@ sudo ./bin/px4 -s px4.config
 ``` bash
 ./build.sh --build_robot
 ./build.sh --upload_robot
+echo "sudo cp /home/debian/robot/lib/librobotcontrol.so.1.0.5 /usr/lib/librobotcontrol.so.1"
 ```
 
 
@@ -202,3 +223,54 @@ debian@beaglebone:~/robot/bin$ /usr/sbin/i2cdetect -y -a -r 2
 **0x68:** MPU-9250 (not MPU-6050)<br>
 **0x76:** BMP280
 
+## Check pru
+
+lsmod |grep uio
+lsmod | grep pru
+ls /sys/class/remoteproc/
+
+https://catch22eu.github.io/website/beaglebone/beaglebone-pru-uio/
+
+
+## Debugging
+### Target
+#### Install
+``` bash
+sudo apt-get install gdbserver
+```
+
+#### Run
+``` bash
+gdbserver localhost:10000 ./bin/px4 -s px4.config
+```
+
+
+``` bash
+target remote 192.168.0.194:10000
+```
+
+## Commands
+
+listener vehicle_gps_position
+listener vehicle_status
+listener estimator_status_flags
+listener health_report
+
+
+# SIH
+``` bash
+./Tools/simulation/jmavsim/jmavsim_run.sh -q -u -p 14562 -o
+```
+-q to allow the communication to QGroundControl
+-o to start jMAVSim in display Only mode
+
+
+sudo tcpdump -i eth0 udp port 14560
+nc -ul -s 0.0.0.0 -p 14560
+
+mavlink start -n wlan0 -x -u 14561 -o 14562 -t 192.168.0.42
+mavlink start -n wlan0 -x -u 14563 -o 14564 -t 172.20.1.63
+netsh interface portproxy add v4tov4 listenaddress=192.168.0.42 listenport=14564 connectaddress=172.20.1.63 connectport=14564
+
+netsh interface portproxy show all
+netsh interface portproxy delete v4tov4 listenaddress=192.168.1.100 listenport=8000

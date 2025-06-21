@@ -57,7 +57,7 @@ MPU9250_I2C::MPU9250_I2C(const I2CSPIDriverConfig &config) :
 	_px4_mag.set_device_type(DRV_MAG_DEVTYPE_AK8963);
 	// in 16-bit sampling mode the mag resolution is 1.5 milli Gauss per bit */
 	_px4_mag.set_scale(1.5e-3f);
-	printf("deviceid: 0x%x\n", get_device_id());	 // 2385937
+	printf("deviceid: 0x%x, rot=%d\n", get_device_id(), config.rotation);	 // 2385937
 }
 
 MPU9250_I2C::~MPU9250_I2C()

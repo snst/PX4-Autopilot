@@ -12,7 +12,8 @@ RUN apt-get update -y
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
      && apt-get -y install --no-install-recommends build-essential python3 python3-pip \
      make binutils gcc g++ bash gzip bzip2 tar unzip rsync wget cmake python3-lxml libxml2 \
-     python3-dev python3-opencv python3-wxgtk4.0 python3-matplotlib python3-pygame
+     python3-dev python3-opencv python3-wxgtk4.0 python3-matplotlib python3-pygame gdb-multiarch \
+     ant ca-certificates-java libvecmath-java openjdk-11-jre openjdk-11-jdk
 
 RUN wget https://developer.arm.com/-/media/Files/downloads/gnu-a/8.3-2019.02/gcc-arm-8.3-2019.02-x86_64-arm-linux-gnueabihf.tar.xz && \
     tar -xf gcc-arm-8.3-2019.02-x86_64-arm-linux-gnueabihf.tar.xz && \

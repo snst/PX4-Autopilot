@@ -26,5 +26,6 @@
 	],
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	"forwardPorts": [14556],
+//	"runArgs": ["--publish=14550:14550/udp"],
+//	"forwardPorts": [14550],
 }
